@@ -3,6 +3,7 @@ from timeit import default_timer
 
 import torch
 import einops
+import numpy
 
 from cs336_basics.ch3.TransformerLM import TransformerLM
 from cs336_basics.ch4.cross_entropy import cross_entropy
@@ -121,19 +122,10 @@ def benchmark(
 
 
 if __name__ == "__main__":
-    result = benchmark(
-        vocab_size=10000,
-        context_length=512,
-        d_model=128,
-        num_layers=4,
-        num_heads=4,
-        d_ff=256,
-        batch_size=4,
-        benchmark_loops=10,
-        warm_up_loops=5,
-        mode=2
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
     )
-    print(result)
     hyper_parameters = {}
     hyper_parameters['small'] = {
         "d_model": 768,
@@ -145,7 +137,7 @@ if __name__ == "__main__":
         "d_model": 1024,
         "d_ff": 4096,
         "num_layers": 24,
-        "num_heads": 24,
+        "num_heads": 16,
     }
     hyper_parameters['large'] = {
         "d_model": 1280,
@@ -165,3 +157,18 @@ if __name__ == "__main__":
         "num_layers": 50,
         "num_heads": 36,
     }
+    for name, params in hyper_parameters.items():
+        logging.info(f"for {name}")
+        result = benchmark(
+            vocab_size=10000,
+            context_length=512,
+            d_model=params["d_model"],
+            num_layers=params["num_layers"],
+            num_heads=params["num_heads"],
+            d_ff=params["d_ff"],
+            batch_size=4,
+            benchmark_loops=10,
+            warm_up_loops=5,
+            mode=2
+        )
+        print(f"[{name}] average:{numpy.average(result):.4f} std:{numpy.std(result):.4f}")
