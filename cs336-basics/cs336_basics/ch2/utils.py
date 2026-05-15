@@ -1,7 +1,7 @@
 import logging
 from typing import Iterator
 
-from ch2.type_define import Connection, GPT2_PAT
+from cs336_basics.ch2.type_define import Connection, GPT2_PAT
 import regex as re
 
 

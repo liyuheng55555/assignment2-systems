@@ -6,8 +6,8 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor, nn
 
-from ch3.RotaryPositionalEmbedding import RotaryPositionalEmbedding
-from ch3.Softmax import softmax
+from cs336_basics.ch3.RotaryPositionalEmbedding import RotaryPositionalEmbedding
+from cs336_basics.ch3.Softmax import softmax
 
 
 class MultiHeadAttention(nn.Module):

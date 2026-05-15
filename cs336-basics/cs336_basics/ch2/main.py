@@ -7,7 +7,7 @@ from time import perf_counter
 import numpy as np
 
 from cs336_basics.pretokenization_example import find_chunk_boundaries
-from ch2.Tokenizer import Tokenizer
+from cs336_basics.ch2.Tokenizer import Tokenizer
 
 
 def _encode_range_worker(

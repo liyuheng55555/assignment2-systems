@@ -3,9 +3,9 @@ from jaxtyping import Float
 
 from torch import nn, Tensor
 
-from ch3.MultiHeadAttention import MultiHeadAttention, MultiHeadAttentionWithRope
-from ch3.PositionWiseFeedForward1 import PositionWiseFeedForward1
-from ch3.RMSNorm1 import RMSNorm1
+from cs336_basics.ch3.MultiHeadAttention import MultiHeadAttention, MultiHeadAttentionWithRope
+from cs336_basics.ch3.PositionWiseFeedForward1 import PositionWiseFeedForward1
+from cs336_basics.ch3.RMSNorm1 import RMSNorm1
 
 
 class TransformerBlock(nn.Module):

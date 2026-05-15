@@ -3,8 +3,8 @@ import torch
 from collections.abc import Callable, Iterable
 from typing import Optional
 
-from ch3.transformer_accounting import calculate_parameters
-from ch4.lr_cosine_schedule import lr_cosine_schedule
+from cs336_basics.ch3.transformer_accounting import calculate_parameters
+from cs336_basics.ch4.lr_cosine_schedule import lr_cosine_schedule
 
 
 class AdamW(torch.optim.Optimizer):
