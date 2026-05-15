@@ -3,11 +3,10 @@ from jaxtyping import Float, Int
 
 from torch import nn, Tensor
 
-from ch3.Embedding import Embedding
-from ch3.Linear import Linear
-from ch3.RMSNorm1 import RMSNorm1
-from ch3.Softmax import softmax
-from ch3.TransformerBlock import TransformerBlock
+from cs336_basics.ch3.Embedding import Embedding
+from cs336_basics.ch3.Linear import Linear
+from cs336_basics.ch3.RMSNorm1 import RMSNorm1
+from cs336_basics.ch3.TransformerBlock import TransformerBlock
 
 
 class TransformerLM(nn.Module):

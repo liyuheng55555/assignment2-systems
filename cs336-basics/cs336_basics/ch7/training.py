@@ -7,18 +7,18 @@ from datetime import datetime
 import einops
 import torch
 import numpy as np
-from ch3.transformer_accounting import calculate_parameters
+from cs336_basics.ch3.transformer_accounting import calculate_parameters
 from jaxtyping import Float
 from torch import Tensor
 
-from ch2.Tokenizer import Tokenizer
-from ch3.Softmax import softmax
-from ch3.TransformerLM import TransformerLM
-from ch4.cross_entropy import cross_entropy
-from ch4.gradient_clipping import gradient_clipping
-from ch4.optimizer_AdamW import AdamW
-from ch5.checkpoint import save_checkpoint, load_checkpoint
-from ch5.get_batch import get_batch
+from cs336_basics.ch2.Tokenizer import Tokenizer
+from cs336_basics.ch3.Softmax import softmax
+from cs336_basics.ch3.TransformerLM import TransformerLM
+from cs336_basics.ch4.cross_entropy import cross_entropy
+from cs336_basics.ch4.gradient_clipping import gradient_clipping
+from cs336_basics.ch4.optimizer_AdamW import AdamW
+from cs336_basics.ch5.checkpoint import save_checkpoint, load_checkpoint
+from cs336_basics.ch5.get_batch import get_batch
 
 ############## Settings ##############
 
