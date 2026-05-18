@@ -1,0 +1,1 @@
+uv run nsys profile --trace=cuda,cudnn,cublas,osrt,nvtx --pytorch=functions-trace,autograd-shapes-nvtx --cudabacktrace=all --python-backtrace=cuda  -o profile/ -- python  cs336_systems/ch1/benchmark.py

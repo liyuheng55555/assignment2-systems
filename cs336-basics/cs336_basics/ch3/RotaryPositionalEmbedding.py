@@ -16,19 +16,19 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         self.theta = theta
         self.d = d_k
         self.max_seq_len = max_seq_len
-
-        # [max_seq_len, self.d]
-        self.cos = torch.zeros(max_seq_len, self.d // 2).to(device)
-        self.sin = torch.zeros(max_seq_len, self.d // 2).to(device)
+        self.device = device
         self.cal_cos_sin()
 
 
     def cal_cos_sin(self):
-        for i in range(self.max_seq_len):
-            for k in range(0, self.d // 2):
-                theta_i_k = i / (self.theta ** ((2*k) / self.d))
-                self.cos[i][k] = math.cos(theta_i_k)
-                self.sin[i][k] = math.sin(theta_i_k)
+        i = torch.arange(self.max_seq_len, device=self.device)
+        k = torch.arange(self.d // 2, device=self.device)
+        extend_i = i[:, None]
+        extend_k = k[None, :]
+        # [max_seq_len, self.d]
+        theta_i_k = extend_i / (self.theta ** ((2*extend_k) / self.d))
+        self.cos = theta_i_k.cos()
+        self.sin = theta_i_k.sin()
 
 
     def forward(
@@ -54,22 +54,5 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         G = torch.stack([g, g_1], dim=-1) # ... sequence_length, self.d // 2, 2
         result = einops.rearrange(G, "... half_d two -> ... (half_d two)")
         return result
-
-        # x_flat = x.flatten()
-        # result = torch.zeros(x.numel())
-        # base_index = 0
-        # while base_index < x.numel() / x.shape[-1]:
-        #     position = token_positions.flatten()[base_index % token_positions.numel()]
-        #     global_index = base_index * self.d
-        #     for g in range(0, self.d, 2):
-        #         k = int(g/2) + 1
-        #         a = x_flat[global_index + g]
-        #         b = x_flat[global_index + g + 1]
-        #         result[global_index + g] = a * self.cos[position][k] - b * self.sin[position][k]
-        #         result[global_index + g + 1] = a * self.sin[position][k] + b * self.cos[position][k]
-        #     base_index += 1
-        #
-        # result_reshape = result.reshape(x.shape)
-        # return result_reshape
 
 

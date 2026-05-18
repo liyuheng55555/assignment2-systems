@@ -5,6 +5,8 @@ import torch
 import einops
 import numpy
 
+import torch.cuda.nvtx as nvtx
+
 from cs336_basics.ch3.TransformerLM import TransformerLM
 from cs336_basics.ch4.cross_entropy import cross_entropy
 from cs336_basics.ch4.optimizer_AdamW import AdamW
@@ -47,15 +49,18 @@ def main_loop(
         batch_size: int,
         mode: int):
     input = torch.randint(0, vocab_size, (batch_size, context_length,))
-    result = model.forward(input)
-    if mode >= 1:
-        result: torch.Tensor = einops.rearrange(result, "batch context_length vocab_size -> (batch context_length) vocab_size")
-        target = torch.arange(batch_size * context_length, device=result.device)
-        ce: torch.Tensor = cross_entropy(result, target)
-        ce.backward()
-    if mode >= 2:
-        optimizer.step()
-        optimizer.zero_grad()
+    with nvtx.range("forward"):
+        result = model.forward(input)
+    with nvtx.range("backward"):
+        if mode >= 1:
+            result: torch.Tensor = einops.rearrange(result, "batch context_length vocab_size -> (batch context_length) vocab_size")
+            target = torch.arange(batch_size * context_length, device=result.device)
+            ce: torch.Tensor = cross_entropy(result, target)
+            ce.backward()
+    with nvtx.range("optimize"):
+        if mode >= 2:
+            optimizer.step()
+            optimizer.zero_grad()
 
 
 # ADAMW_PARAMS
@@ -86,17 +91,18 @@ def benchmark(
         device: torch.device = torch.device("cuda"),
         data_type: torch.dtype = torch.bfloat16
 ) -> list[float]:
-    weights = weights_init(vocab_size, d_model, num_layers, d_ff, device, data_type)
-    model = TransformerLM(vocab_size, context_length, d_model, num_layers, num_heads, d_ff, 10000, weights)
-    optimizer = AdamW(
-        model.parameters(),
-        lr=LEARNING_RATE,
-        betas=BETAS,
-        weight_decay=WEIGHT_DECAY,
-        eps=EPS,
-        device=device,
-        cosine_cycle_iters=COSINE_CYCLE_ITERS,
-    )
+    with nvtx.range("init"):
+        weights = weights_init(vocab_size, d_model, num_layers, d_ff, device, data_type)
+        model = TransformerLM(vocab_size, context_length, d_model, num_layers, num_heads, d_ff, 10000, weights)
+        optimizer = AdamW(
+            model.parameters(),
+            lr=LEARNING_RATE,
+            betas=BETAS,
+            weight_decay=WEIGHT_DECAY,
+            eps=EPS,
+            device=device,
+            cosine_cycle_iters=COSINE_CYCLE_ITERS,
+        )
 
     logging.info("warm up start")
 
@@ -112,7 +118,7 @@ def benchmark(
     for i in range(benchmark_loops):
         start = default_timer()
         main_loop(model, optimizer, vocab_size, context_length, batch_size, mode)
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         result.append(default_timer() - start)
         logging.info(f"loop {i} done")
 
@@ -133,30 +139,30 @@ if __name__ == "__main__":
         "num_layers": 12,
         "num_heads": 12,
     }
-    hyper_parameters['medium'] = {
-        "d_model": 1024,
-        "d_ff": 4096,
-        "num_layers": 24,
-        "num_heads": 16,
-    }
-    hyper_parameters['large'] = {
-        "d_model": 1280,
-        "d_ff": 5120,
-        "num_layers": 36,
-        "num_heads": 20,
-    }
-    hyper_parameters['xl'] = {
-        "d_model": 2560,
-        "d_ff": 10240,
-        "num_layers": 32,
-        "num_heads": 32,
-    }
-    hyper_parameters['10B'] = {
-        "d_model": 4608,
-        "d_ff": 12288,
-        "num_layers": 50,
-        "num_heads": 36,
-    }
+    # hyper_parameters['medium'] = {
+    #     "d_model": 1024,
+    #     "d_ff": 4096,
+    #     "num_layers": 24,
+    #     "num_heads": 16,
+    # }
+    # hyper_parameters['large'] = {
+    #     "d_model": 1280,
+    #     "d_ff": 5120,
+    #     "num_layers": 36,
+    #     "num_heads": 20,
+    # }
+    # hyper_parameters['xl'] = {
+    #     "d_model": 2560,
+    #     "d_ff": 10240,
+    #     "num_layers": 32,
+    #     "num_heads": 32,
+    # }
+    # hyper_parameters['10B'] = {
+    #     "d_model": 4608,
+    #     "d_ff": 12288,
+    #     "num_layers": 50,
+    #     "num_heads": 36,
+    # }
     for name, params in hyper_parameters.items():
         logging.info(f"for {name}")
         result = benchmark(
