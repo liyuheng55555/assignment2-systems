@@ -10,6 +10,9 @@ import torch
 import triton
 import triton.language as tl
 
+from ch4.FlashAttentionBackward import flash_attention_backward
+
+
 class FlashAttentionByTriton(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -47,7 +50,11 @@ class FlashAttentionByTriton(torch.autograd.Function):
             is_causal
         )
 
-        ctx.save_for_backward(L)
+        ctx.save_for_backward(L, Q, K, V, O)
+        ctx.is_causal = is_causal
+        ctx.b_q = b_q
+        ctx.b_kv = b_kv
+        ctx.d = d
 
         return O
 
@@ -136,7 +143,7 @@ class FlashAttentionByTriton(torch.autograd.Function):
                     q_block_index * B_q, j * B_kv,
                     B_q, B_kv
                 )
-                part_S = tl.where(causal_mask, float("-inf"), part_S)
+                part_S = tl.where(causal_mask, -1e6, part_S)
             mi_new = tl.maximum(mi, tl.max(part_S, axis=-1))
             P = tl.exp(part_S - mi_new[:, None])
             exp_correction = tl.exp(mi - mi_new)
@@ -163,8 +170,8 @@ class FlashAttentionByTriton(torch.autograd.Function):
 
 
     @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        pass
+    def backward(ctx: torch.autograd.function.FunctionCtx, *grad_outputs: Any) -> Any:
+        return flash_attention_backward(ctx, grad_outputs[0])
 
 @triton.jit
 # 不需要计算、需要计算和mask、需要计算不需要mask

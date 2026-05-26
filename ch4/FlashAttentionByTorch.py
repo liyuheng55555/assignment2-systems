@@ -4,6 +4,8 @@ from typing import Any
 import einops
 import torch
 
+from ch4.FlashAttentionBackward import flash_attention_backward
+
 
 class FlashAttentionByTorch(torch.autograd.Function):
     @staticmethod
@@ -14,8 +16,8 @@ class FlashAttentionByTorch(torch.autograd.Function):
         d = torch.full((1,), float(Q.shape[-1]))
         N_q = Q.shape[-2]
         N_kv = K.shape[-2]
-        b_q = 15
-        b_kv = 33
+        b_q = 16
+        b_kv = 32
         T_q = (N_q + b_q - 1) // b_q
         T_k = (N_kv + b_kv - 1) // b_kv
         Kt = einops.rearrange(K, "... N_k d -> ... d N_k")
@@ -41,10 +43,16 @@ class FlashAttentionByTorch(torch.autograd.Function):
             Li = mi + li.log()
             O[..., range_Q, :] = Oi
             L[..., range_Q] = Li
-        ctx.save_for_backward(L)
+
+        ctx.save_for_backward(L, Q, K, V, O)
+        ctx.is_causal = is_causal
+        ctx.b_q = b_q
+        ctx.b_kv = b_kv
+        ctx.d = d
+
         return O
 
     @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        pass
+    def backward(ctx: torch.autograd.function.FunctionCtx, *grad_outputs: Any) -> Any:
+        return flash_attention_backward(ctx, grad_outputs[0])
 
