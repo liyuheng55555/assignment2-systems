@@ -43,7 +43,8 @@ class FlashAttentionByTriton(torch.autograd.Function):
             0,
             d,
             b_q,
-            b_kv, T_k
+            b_kv, T_k,
+            is_causal
         )
 
         ctx.save_for_backward(L)
@@ -66,6 +67,7 @@ class FlashAttentionByTriton(torch.autograd.Function):
             B_q: tl.constexpr,
             B_kv: tl.constexpr, # 分块尺寸
             T_kv: tl.constexpr, # 多少个分块
+            is_causal: tl.constexpr
     ):
 
         batch_index = tl.program_id(0)
@@ -129,6 +131,12 @@ class FlashAttentionByTriton(torch.autograd.Function):
             kt_block = tl.load(kt_block_ptr, boundary_check=(1,), padding_option="zero")
             v_block = tl.load(v_block_ptr, boundary_check=(0,), padding_option="zero")
             part_S = tl.dot(q_block, kt_block) / tl.sqrt(float_d)
+            if is_causal:
+                need_calculate, causal_mask = prepare_causal_mask(
+                    q_block_index * B_q, j * B_kv,
+                    B_q, B_kv
+                )
+                part_S = tl.where(causal_mask, float("-inf"), part_S)
             mi_new = tl.maximum(mi, tl.max(part_S, axis=-1))
             P = tl.exp(part_S - mi_new[:, None])
             exp_correction = tl.exp(mi - mi_new)
@@ -144,6 +152,7 @@ class FlashAttentionByTriton(torch.autograd.Function):
         tl.store(o_block_ptr, o_block, boundary_check=(0,))
         tl.store(l_block_ptr, l_block, boundary_check=(0,))
 
+
     @staticmethod
     def get_batch_count(X: torch.Tensor) -> int:
         shapes = X.shape[:-2]
@@ -156,3 +165,19 @@ class FlashAttentionByTriton(torch.autograd.Function):
     @staticmethod
     def backward(ctx: Any, *grad_outputs: Any) -> Any:
         pass
+
+@triton.jit
+# 不需要计算、需要计算和mask、需要计算不需要mask
+def prepare_causal_mask(
+        h_offset: tl.constexpr, w_offset: tl.constexpr,
+        h_block_shape: tl.constexpr, w_block_shape: tl.constexpr):
+    left_down = (h_offset + h_block_shape, w_offset)
+    right_up = (h_offset, w_offset + w_block_shape)
+    # if left_down[0] < left_down[1]:
+    #     return False, None
+    # if right_up[0] > right_up[1]:
+    #     return True, None
+    h_offsets = h_offset + tl.arange(0, h_block_shape)
+    w_offsets = w_offset + tl.arange(0, w_block_shape)
+    mask = h_offsets[:, None] < w_offsets[None, :]
+    return True, mask
