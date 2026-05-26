@@ -39,8 +39,9 @@ def benchmark(seq_len: int, d: int, dtype, op: int):
         O = FlashAttentionByTriton.apply(Q, K, V, False)
         if op >= 1:
             O.backward(grad_O)
+        return O
 
-    f = _attention_and_lse
+    f = core_loop
 
     logging.info(f"For {seq_len=} {d=} {dtype=}")
     device = torch.device("cuda")
@@ -61,11 +62,11 @@ def benchmark(seq_len: int, d: int, dtype, op: int):
         for i in range(10):
             f(Q, K, V, grad_O, op)
             torch.cuda.synchronize()
-        return (perf_counter() - start) / 10 * 1000, torch.cuda.max_memory_allocated()
+        return (perf_counter() - start) / 10 * 1000, torch.cuda.max_memory_allocated()/1024/1024/1024
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
             logging.warning(f"OOM for {seq_len=} {d=} {dtype=}, set result to -1")
-            return -1
+            return -1, -1
         raise
 
 
@@ -86,9 +87,9 @@ if __name__ == "__main__":
 
     with output_csv.open("w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["seq_len", "d", "dtype", "op", "latency"])
+        writer.writerow(["seq_len", "d", "dtype", "op", "latency", "peak_memory"])
         for precision in precisions:
             for seq_len in seq_len_list:
                 for d in d_list:
-                    latency = benchmark(seq_len, d, precision, 0)
-                    writer.writerow([seq_len, d, str(precision), 0, latency])
+                    latency, memory = benchmark(seq_len, d, precision, 0)
+                    writer.writerow([seq_len, d, str(precision), 0, latency, memory])
