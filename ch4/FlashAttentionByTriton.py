@@ -22,8 +22,8 @@ class FlashAttentionByTriton(torch.autograd.Function):
         d = Q.shape[-1]
         N_q = Q.shape[-2]
         N_kv = K.shape[-2]
-        b_q = 16
-        b_kv = 32
+        b_kv = 64
+        b_q = 64
         T_q = (N_q + b_q - 1) // b_q
         T_k = (N_kv + b_kv - 1) // b_kv
         Kt = einops.rearrange(K, "... N_k d -> ... d N_k")
@@ -89,7 +89,6 @@ class FlashAttentionByTriton(torch.autograd.Function):
             block_shape=(B_q, d),
             order=(1,0),
         )
-        q_block = tl.load(q_block_ptr, boundary_check=(0,), padding_option="zero")
 
         kt_block_ptr = tl.make_block_ptr(
             base=Kt_ptr + batch_index * kt_batch_stride,
@@ -117,10 +116,6 @@ class FlashAttentionByTriton(torch.autograd.Function):
             block_shape=(B_q, d),
             order=(1,0),
         )
-        o_block = tl.load(o_block_ptr, boundary_check=(0,), padding_option="zero")
-
-        li = tl.zeros((B_q,), dtype=tl.float32)
-        mi = tl.full((B_q,), float("-inf"), dtype=tl.float32)
 
         l_block_ptr = tl.make_block_ptr(
             base=L_ptr + batch_index * l_batch_stride,
@@ -131,6 +126,10 @@ class FlashAttentionByTriton(torch.autograd.Function):
             order=(0,),
         )
 
+        q_block = tl.load(q_block_ptr, boundary_check=(0,), padding_option="zero")
+        o_block = tl.load(o_block_ptr, boundary_check=(0,), padding_option="zero")
+        li = tl.zeros((B_q,), dtype=tl.float32)
+        mi = tl.full((B_q,), float("-inf"), dtype=tl.float32)
         float_d = float(d)
 
 
@@ -145,10 +144,10 @@ class FlashAttentionByTriton(torch.autograd.Function):
                 )
                 part_S = tl.where(causal_mask, -1e6, part_S)
             mi_new = tl.maximum(mi, tl.max(part_S, axis=-1))
-            P = tl.exp(part_S - mi_new[:, None])
+            P = tl.exp(part_S - mi_new[:, None]).to(part_S.dtype)
             exp_correction = tl.exp(mi - mi_new)
             li = exp_correction * li + tl.sum(P, axis=-1)
-            o_block = exp_correction[:, None] * o_block + tl.dot(P, v_block)
+            o_block = exp_correction[:, None] * o_block + tl.dot(P.to(v_block.dtype), v_block)
 
             mi = mi_new
             kt_block_ptr = kt_block_ptr.advance((0, B_kv))
