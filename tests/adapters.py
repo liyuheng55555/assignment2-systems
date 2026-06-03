@@ -3,7 +3,9 @@ from __future__ import annotations
 import torch
 import torch.distributed as dist
 
-from ch5.NaiveDDP import NaiveDDP
+from ch5.DDP import NaiveDDP
+
+from ch5.DDP import OverlapDDP
 
 
 # from ch4.FlashAttentionByTriton import FlashAttentionByTriton
@@ -57,7 +59,7 @@ def get_ddp(module: torch.nn.Module) -> torch.nn.Module:
         Instance of a DDP class.
     """
     # For example: return DDP(module)
-    return NaiveDDP(module)
+    return OverlapDDP(module)
 
 
 def ddp_on_after_backward(ddp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
@@ -72,16 +74,7 @@ def ddp_on_after_backward(ddp_model: torch.nn.Module, optimizer: torch.optim.Opt
             Optimizer being used with the DDP-wrapped model.
     """
     # For example: ddp_model.finish_gradient_synchronization()
-    old_grads: list[torch.Tensor] = []
-    for parameter in ddp_model.parameters():
-        if parameter.grad is not None:
-            old_grads.append(parameter.grad)
-    flat = torch._utils._flatten_dense_tensors(old_grads)
-    dist.all_reduce(flat, async_op=False)
-    flat /= dist.get_world_size()
-    grads = torch._utils._unflatten_dense_tensors(flat, old_grads)
-    for old_grad, new_grad in zip(old_grads, grads):
-        old_grad.copy_(new_grad)
+    return
 
 
 
