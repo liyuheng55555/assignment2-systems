@@ -23,7 +23,6 @@ class OverlapDDP(torch.nn.Module):
         self.module = module
         self.handles = []
         self.lock = threading.Lock()
-        self.grad_count = 0
         
         def all_reduce_hook(x: torch.Tensor):
             handle = dist.all_reduce(x.grad, async_op=True)
@@ -35,7 +34,6 @@ class OverlapDDP(torch.nn.Module):
             dist.broadcast(parameter, src=0)
             if parameter.requires_grad:
                 parameter.register_post_accumulate_grad_hook(hook=all_reduce_hook)
-                self.grad_count += 1
 
 
     def forward(self, *args, **kwargs):
@@ -43,8 +41,6 @@ class OverlapDDP(torch.nn.Module):
 
 
     def finish_gradient_synchronization(self):
-        while len(self.handles) < self.grad_count:
-            sleep(0.1)
         for handle in self.handles:
             handle.wait()
         with self.lock:
