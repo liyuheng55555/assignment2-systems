@@ -6,6 +6,7 @@ import torch.distributed as dist
 from ch5.DDP import NaiveDDP
 
 from ch5.DDP import OverlapDDP
+from ch5.ShardedOptimizer import ShardedOptimizer
 
 
 # from ch4.FlashAttentionByTriton import FlashAttentionByTriton
@@ -144,4 +145,5 @@ def get_sharded_optimizer(params, optimizer_cls: type[torch.optim.Optimizer], **
     Returns:
         Instance of sharded optimizer.
     """
-    raise NotImplementedError
+    # raise NotImplementedError
+    return ShardedOptimizer(params, optimizer_cls, **kwargs)
