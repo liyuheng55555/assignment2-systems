@@ -5,7 +5,7 @@ from torch import nn, Tensor
 
 from cs336_basics.ch3.MultiHeadAttention import MultiHeadAttention, MultiHeadAttentionWithRope
 from cs336_basics.ch3.PositionWiseFeedForward1 import PositionWiseFeedForward1
-from cs336_basics.ch3.RMSNorm1 import RMSNorm
+from cs336_basics.ch3.RMSNorm import RMSNorm
 
 
 class TransformerBlock(nn.Module):
@@ -25,7 +25,7 @@ class TransformerBlock(nn.Module):
         self.d_ff = d_ff
         self.max_seq_len = max_seq_len
 
-        self.norm1 = RMSNorm(self.d_model, weights['ln1.weight'])
+        self.norm1 = RMSNorm(weights['ln1.weight'])
 
         self.multihead_attention = MultiHeadAttentionWithRope(
             d_model,
@@ -38,7 +38,7 @@ class TransformerBlock(nn.Module):
             weights['attn.output_proj.weight']
         )
 
-        self.norm2 = RMSNorm(self.d_model, weights['ln2.weight'])
+        self.norm2 = RMSNorm(weights['ln2.weight'])
 
         self.position_wise_feed_forward = PositionWiseFeedForward1(
             d_model,

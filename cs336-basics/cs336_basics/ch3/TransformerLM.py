@@ -5,7 +5,7 @@ from torch import nn, Tensor
 
 from cs336_basics.ch3.Embedding import Embedding
 from cs336_basics.ch3.Linear import Linear
-from cs336_basics.ch3.RMSNorm1 import RMSNorm
+from cs336_basics.ch3.RMSNorm import RMSNorm
 from cs336_basics.ch3.TransformerBlock import TransformerBlock
 
 
@@ -30,7 +30,7 @@ class TransformerLM(nn.Module):
         for i in range(num_layers):
             self.transformer_blocks.append(TransformerBlock(d_model, num_heads, d_ff, context_length, rope_theta, self.extract_weights(weights, i)))
 
-        self.norm = RMSNorm(d_model, weights['ln_final.weight'])
+        self.norm = RMSNorm(weights['ln_final.weight'])
 
         self.linear = Linear(d_model, vocab_size, weights=weights['lm_head.weight'])
 
