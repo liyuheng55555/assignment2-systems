@@ -4,7 +4,7 @@ import einops
 import torch
 from torch import nn
 
-class RMSNorm1(nn.Module):
+class RMSNorm(nn.Module):
     def __init__(self, d_model: int, weights: torch.Tensor, eps: float = 1e-5, device=None, dtype=None):
         super().__init__()
         self.eps = eps
