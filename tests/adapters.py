@@ -101,7 +101,7 @@ def get_fsdp(module: torch.nn.Module, compute_dtype: torch.dtype | None = None) 
     return FSDP(module, compute_dtype=compute_dtype)
 
 
-def fsdp_on_after_backward(fsdp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
+def fsdp_on_after_backward(fsdp_model: FSDP, optimizer: torch.optim.Optimizer):
     """
     Code to run after the backward pass is completed, but before we take
     an optimizer step.
@@ -113,10 +113,10 @@ def fsdp_on_after_backward(fsdp_model: torch.nn.Module, optimizer: torch.optim.O
             Optimizer being used with the FSDP-wrapped model.
     """
     # For example: fsdp_model.finish_gradient_synchronization()
-    raise NotImplementedError
+    fsdp_model.finish_gradient_synchronization()
 
 
-def fsdp_gather_full_params(fsdp_model: torch.nn.Module) -> dict[str, torch.Tensor]:
+def fsdp_gather_full_params(fsdp_model: FSDP) -> dict[str, torch.Tensor]:
     """
     All-gather sharded parameters from the FSDP model to reconstruct full
     parameter tensors. Replicated parameters are returned as-is.
