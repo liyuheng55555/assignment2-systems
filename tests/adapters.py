@@ -6,6 +6,7 @@ import torch.distributed as dist
 from ch5.DDP import NaiveDDP
 
 from ch5.DDP import OverlapDDP
+from ch5.FSDP import FSDP
 from ch5.ShardedOptimizer import ShardedOptimizer
 
 
@@ -97,7 +98,7 @@ def get_fsdp(module: torch.nn.Module, compute_dtype: torch.dtype | None = None) 
         Instance of an FSDP class.
     """
     # For example: return FSDP(module, compute_dtype=compute_dtype)
-    raise NotImplementedError
+    return FSDP(module, compute_dtype=compute_dtype)
 
 
 def fsdp_on_after_backward(fsdp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
