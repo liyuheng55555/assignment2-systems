@@ -20,25 +20,32 @@ class FSDP(torch.nn.Module):
         self.handles = []
 
         def backward_pre_hook(m: torch.nn.Module, *args):
-            param_gather_hook(m, *args)
+            for param in m.parameters():
+                name = self.param_names[param]
+                full_tensor = self._recover_param(name, param)
+                param.data = full_tensor
 
-        def param_gather_hook(m: torch.nn.Module, *args):
+        def forward_pre_hook(m: torch.nn.Module, *args):
             for param in m.parameters():
                 name = self.param_names[param]
                 full_tensor = self._recover_param(name, param)
                 param.data = full_tensor
                 # m.register_parameter(name, torch.nn.Parameter(full_tensor))
 
-        def param_shard_hook(m: torch.nn.Module, *args):
+        def forward_hook(m: torch.nn.Module, *args):
             for param in m.parameters():
                 sharded_tensor = self._sharded_param(param.data)
                 param.data = sharded_tensor
                 # sub_module.register_parameter(param_name, torch.nn.Parameter(sharded_tensor))
 
-        def all_reduce_hook(x: torch.Tensor):
-            handle = dist.all_reduce(x.grad, async_op=True)
-            with self.lock:
-                self.handles.append(handle)
+        def all_reduce_hook(x: torch.nn.Parameter):
+            handle = dist.all_reduce(x.grad, async_op=False)
+            # with self.lock:
+            #     self.handles.append(handle)
+            x.data = self._sharded_param(x.data)
+            x.grad = self._sharded_param(x.grad)
+            x.grad /= dist.get_world_size()
+
 
         for param_name, param in module.named_parameters(recurse=True):
             sharded_tensor = self._sharded_param(param.data)
@@ -55,10 +62,10 @@ class FSDP(torch.nn.Module):
             self.param_names[param] = param_name
 
         for module_name, sub_module in module.named_children():
-            sub_module.register_forward_pre_hook(param_gather_hook)
-            sub_module.register_forward_hook(param_shard_hook)
-            sub_module.register_full_backward_pre_hook(backward_pre_hook)
-            sub_module.register_full_backward_hook(param_shard_hook)
+            sub_module.register_forward_pre_hook(forward_pre_hook)
+            sub_module.register_forward_hook(forward_hook)
+            sub_module.register_full_backward_pre_hook(forward_pre_hook)
+            # sub_module.register_full_backward_hook(param_shard_hook)
 
 
     def _sharded_param(self, full_param: torch.Tensor) -> torch.Tensor:
@@ -93,11 +100,12 @@ class FSDP(torch.nn.Module):
 
 
     def finish_gradient_synchronization(self):
-        for handle in self.handles:
-            handle.wait()
-            with self.lock:
-                self.handles.clear()
-            for parameter in self.module.parameters():
-                if parameter.grad is not None:
-                    parameter.grad /= dist.get_world_size()
-            return
+        return
+        # for handle in self.handles:
+        #     handle.wait()
+        #     with self.lock:
+        #         self.handles.clear()
+        #     for parameter in self.module.parameters():
+        #         if parameter.grad is not None:
+        #             parameter.grad /= dist.get_world_size()
+        #     return
