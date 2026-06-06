@@ -16,34 +16,33 @@ class FSDP(torch.nn.Module):
         self.module = module
         self.param_infos: dict[str, dict] = {}
         self.param_names: dict[torch.nn.Parameter, str] = {}
+        self.param_buffer: dict[torch.nn.Parameter, torch.Tensor] = {}
+        self.compute_dtype = compute_dtype
+
         self.lock = threading.Lock()
         self.handles = []
 
-        def backward_pre_hook(m: torch.nn.Module, *args):
+        def pre_hook(m: torch.nn.Module, *args):
             for param in m.parameters():
                 name = self.param_names[param]
-                full_tensor = self._recover_param(name, param)
-                param.data = full_tensor
+                self.param_buffer[param] = param.data
+                param.data = self._recover_param(name, param)
 
-        def forward_pre_hook(m: torch.nn.Module, *args):
-            for param in m.parameters():
-                name = self.param_names[param]
-                full_tensor = self._recover_param(name, param)
-                param.data = full_tensor
                 # m.register_parameter(name, torch.nn.Parameter(full_tensor))
 
         def forward_hook(m: torch.nn.Module, *args):
             for param in m.parameters():
-                sharded_tensor = self._sharded_param(param.data)
-                param.data = sharded_tensor
+                param.data = self.param_buffer[param]
                 # sub_module.register_parameter(param_name, torch.nn.Parameter(sharded_tensor))
 
         def all_reduce_hook(x: torch.nn.Parameter):
             handle = dist.all_reduce(x.grad, async_op=False)
             # with self.lock:
             #     self.handles.append(handle)
-            x.data = self._sharded_param(x.data)
+            x.data = self.param_buffer[x]
             x.grad = self._sharded_param(x.grad)
+            if self.compute_dtype is not None:
+                x.grad = x.grad.to(dtype=self.compute_dtype)
             x.grad /= dist.get_world_size()
 
 
@@ -62,9 +61,9 @@ class FSDP(torch.nn.Module):
             self.param_names[param] = param_name
 
         for module_name, sub_module in module.named_children():
-            sub_module.register_forward_pre_hook(forward_pre_hook)
+            sub_module.register_forward_pre_hook(pre_hook)
             sub_module.register_forward_hook(forward_hook)
-            sub_module.register_full_backward_pre_hook(forward_pre_hook)
+            sub_module.register_full_backward_pre_hook(pre_hook)
             # sub_module.register_full_backward_hook(param_shard_hook)
 
 
@@ -85,6 +84,8 @@ class FSDP(torch.nn.Module):
         flatten = torch.cat(buffer, dim=0)
         flatten = flatten[:param_info['numel']]
         full_tensor = flatten.reshape(param_info['shape'])
+        if self.compute_dtype is not None:
+            full_tensor = full_tensor.to(dtype=self.compute_dtype)
         return full_tensor
 
 
