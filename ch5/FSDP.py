@@ -26,7 +26,7 @@ class FSDP(torch.nn.Module):
             for param in m.parameters():
                 name = self.param_names[param]
                 self.param_buffer[param] = param.data
-                param.data = self._recover_param(name, param)
+                param.data = self._recover_param(name, param, expect_dtype=self.compute_dtype)
 
                 # m.register_parameter(name, torch.nn.Parameter(full_tensor))
 
@@ -40,9 +40,11 @@ class FSDP(torch.nn.Module):
             # with self.lock:
             #     self.handles.append(handle)
             x.data = self.param_buffer[x]
-            x.grad = self._sharded_param(x.grad)
-            if self.compute_dtype is not None:
-                x.grad = x.grad.to(dtype=self.compute_dtype)
+            # assert x.grad.dtype == self._sharded_param(x.grad).dtype
+            # print(f"{x.data.dtype=} {x.grad.dtype=}  {self._sharded_param(x.grad).dtype=}")
+            x.grad = self._sharded_param(x.grad).to(x.dtype)
+            # if self.compute_dtype is not None:
+            #     x.grad = x.grad.to(dtype=self.compute_dtype)
             x.grad /= dist.get_world_size()
 
 
@@ -77,22 +79,21 @@ class FSDP(torch.nn.Module):
         return result
 
 
-    def _recover_param(self, param_name: str, param: torch.nn.Parameter) -> torch.Tensor:
+    def _recover_param(self, param_name: str, param: torch.nn.Parameter, expect_dtype) -> torch.Tensor:
         param_info = self.param_infos[param_name]
         buffer = [torch.zeros(param_info['shard'], device=param.device) for _ in range(dist.get_world_size())]
         dist.all_gather(buffer, param.data)
         flatten = torch.cat(buffer, dim=0)
         flatten = flatten[:param_info['numel']]
         full_tensor = flatten.reshape(param_info['shape'])
-        if self.compute_dtype is not None:
-            full_tensor = full_tensor.to(dtype=self.compute_dtype)
+        full_tensor = full_tensor.to(dtype=expect_dtype)
         return full_tensor
 
 
     def get_full_params(self):
         result = {}
         for name, param in self.module.named_parameters():
-            result[name] = self._recover_param(name, param)
+            result[name] = self._recover_param(name, param, None)
         return result
 
 
