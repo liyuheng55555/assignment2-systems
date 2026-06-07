@@ -195,7 +195,8 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
     start_time = time.perf_counter()
     loss_sum = 0
     for iteration in range(start_iteration, TOTAL_STEPS):
-        batch, target = get_batch(data, batch_size=BATCH_SIZE, context_length=CONTEXT_LENGTH, device=DEVICE)
+        with nvtx.range("get batch"):
+            batch, target = get_batch(data, batch_size=BATCH_SIZE, context_length=CONTEXT_LENGTH, device=DEVICE)
 
         if PROFILE:
             BACKEND.synchronize()
@@ -333,7 +334,7 @@ def accounting():
 # train(checkpoint_path=Path("checkpoints/1000.ckpt"))
 # infer()
 if __name__ == "__main__":
-    single_train()
+    ddp_train()
     # accounting()
     # ddp_train()
 

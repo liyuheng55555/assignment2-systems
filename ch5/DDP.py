@@ -1,5 +1,6 @@
+import logging
 import threading
-from time import sleep
+from time import sleep, perf_counter
 
 import torch.nn
 import torch.distributed as dist
@@ -31,7 +32,8 @@ class OverlapDDP(torch.nn.Module):
             # x.grad /= dist.get_world_size()
         
         for parameter in self.module.parameters():
-            dist.broadcast(parameter, src=0)
+            with torch.no_grad():
+                dist.broadcast(parameter, src=0)
             if parameter.requires_grad:
                 parameter.register_post_accumulate_grad_hook(hook=all_reduce_hook)
 
@@ -41,8 +43,10 @@ class OverlapDDP(torch.nn.Module):
 
 
     def finish_gradient_synchronization(self):
+        start = perf_counter()
         for handle in self.handles:
             handle.wait()
+        logging.info(f"{dist.get_rank()=} gradient sync cost time {perf_counter() - start:.3} s")
         with self.lock:
             self.handles.clear()
         for parameter in self.module.parameters():
