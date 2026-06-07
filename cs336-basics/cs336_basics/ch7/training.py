@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 import csv
 from pathlib import Path
@@ -6,7 +7,10 @@ from datetime import datetime
 
 import einops
 import torch
+import torch.distributed as dist
 import numpy as np
+
+from ch5.DDP import NaiveDDP
 from cs336_basics.ch3.transformer_accounting import calculate_parameters
 from jaxtyping import Float
 from torch import Tensor
@@ -66,92 +70,111 @@ logging.basicConfig(
 
 ################ Settings Done #################
 
-weights = {
-    'token_embeddings.weight': torch.empty(VOCAB_SIZE, D_MODEL, device=DEVICE, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
-    'ln_final.weight': torch.ones(D_MODEL, device=DEVICE, dtype=DATA_TYPE),
-    'lm_head.weight': torch.empty(VOCAB_SIZE, D_MODEL, device=DEVICE, dtype=DATA_TYPE).normal_(mean=0, std=0.02),
-}
-for i in range(NUM_LAYERS):
-    layer_weights = {
-        f'layers.{i}.attn.q_proj.weight': torch.empty(D_MODEL, D_MODEL, device=DEVICE, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
-        f'layers.{i}.attn.k_proj.weight': torch.empty(D_MODEL, D_MODEL, device=DEVICE, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
-        f'layers.{i}.attn.v_proj.weight': torch.empty(D_MODEL, D_MODEL, device=DEVICE, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
-        f'layers.{i}.attn.output_proj.weight': torch.empty(D_MODEL, D_MODEL, device=DEVICE, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
-        f'layers.{i}.ffn.w1.weight': torch.empty(D_FF, D_MODEL, device=DEVICE, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
-        f'layers.{i}.ffn.w2.weight': torch.empty(D_MODEL, D_FF, device=DEVICE, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
-        f'layers.{i}.ffn.w3.weight': torch.empty(D_FF, D_MODEL, device=DEVICE, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
-        f'layers.{i}.ln1.weight': torch.ones(D_MODEL, device=DEVICE, dtype=DATA_TYPE),
-        f'layers.{i}.ln2.weight': torch.ones(D_MODEL, device=DEVICE, dtype=DATA_TYPE),
+def init_model(device) -> (torch.nn.Module, torch.optim.Optimizer):
+
+    weights = {
+        'token_embeddings.weight': torch.empty(VOCAB_SIZE, D_MODEL, device=device, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
+        'ln_final.weight': torch.ones(D_MODEL, device=device, dtype=DATA_TYPE),
+        'lm_head.weight': torch.empty(VOCAB_SIZE, D_MODEL, device=device, dtype=DATA_TYPE).normal_(mean=0, std=0.02),
     }
-    weights |= layer_weights
+    for i in range(NUM_LAYERS):
+        layer_weights = {
+            f'layers.{i}.attn.q_proj.weight': torch.empty(D_MODEL, D_MODEL, device=device, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
+            f'layers.{i}.attn.k_proj.weight': torch.empty(D_MODEL, D_MODEL, device=device, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
+            f'layers.{i}.attn.v_proj.weight': torch.empty(D_MODEL, D_MODEL, device=device, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
+            f'layers.{i}.attn.output_proj.weight': torch.empty(D_MODEL, D_MODEL, device=device, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
+            f'layers.{i}.ffn.w1.weight': torch.empty(D_FF, D_MODEL, device=device, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
+            f'layers.{i}.ffn.w2.weight': torch.empty(D_MODEL, D_FF, device=device, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
+            f'layers.{i}.ffn.w3.weight': torch.empty(D_FF, D_MODEL, device=device, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
+            f'layers.{i}.ln1.weight': torch.ones(D_MODEL, device=device, dtype=DATA_TYPE),
+            f'layers.{i}.ln2.weight': torch.ones(D_MODEL, device=device, dtype=DATA_TYPE),
+        }
+        weights |= layer_weights
 
+    logging.info("Init model...")
+    model = TransformerLM(
+        VOCAB_SIZE,
+        CONTEXT_LENGTH,
+        D_MODEL,
+        NUM_LAYERS,
+        NUM_HEADS,
+        D_FF,
+        ROPE_THETA,
+        weights
+    )
 
+    logging.info("Init optimizer...")
+    optimizer = AdamW(
+        model.parameters(),
+        lr=LEARNING_RATE,
+        betas=BETAS,
+        weight_decay=WEIGHT_DECAY,
+        eps=EPS,
+        device=device,
+        cosine_cycle_iters=COSINE_CYCLE_ITERS,
+    )
 
-logging.info("Init model...")
-model = TransformerLM(
-    VOCAB_SIZE,
-    CONTEXT_LENGTH,
-    D_MODEL,
-    NUM_LAYERS,
-    NUM_HEADS,
-    D_FF,
-    ROPE_THETA,
-    weights
-)
-
-logging.info("Init optimizer...")
-optimizer = AdamW(
-    model.parameters(),
-    lr=LEARNING_RATE,
-    betas=BETAS,
-    weight_decay=WEIGHT_DECAY,
-    eps=EPS,
-    device=DEVICE,
-    cosine_cycle_iters=COSINE_CYCLE_ITERS,
-)
+    return model, optimizer
 
 # for param in model.parameters():
 #     print(param.shape)
 
-def train(checkpoint_path: Path = None):
+def ddp_train():
+    world_size = 2
+    torch.multiprocessing.spawn(
+        train,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True
+    )
+
+def _ddp_train(rank: int, world_size: int, *args):
+    device = _setup_process_group(rank=rank, world_size=world_size, backend="nccl")
+    model, optimizer = init_model(device)
+    train(model, optimizer, rank=rank)
+
+
+
+def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_path: Path = None, rank: int=None):
     logging.info("training start")
     data_path = Path("/data/cs336/data/tinystories_train_tokenized/result.npy")
     data = np.load(data_path, mmap_mode="r")
 
     train_start_time = datetime.now()
-    run_id = train_start_time.strftime("%Y%m%d_%H%M%S")
-    run_dir = Path("training_runs") / f"run_{run_id}"
-    checkpoint_dir = run_dir / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=False)
-    csv_file_path = run_dir / f"train_log_{run_id}.csv"
-    logging.info(f"training run dir: {run_dir}")
-    csv_file = open(csv_file_path, "w", newline="", encoding="utf-8")
-    csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(["record_type", "timestamp", "key", "value", "step", "loss"])
+    if rank==0:
+        run_id = train_start_time.strftime("%Y%m%d_%H%M%S")
+        run_dir = Path("training_runs") / f"run_{run_id}"
+        checkpoint_dir = run_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=False)
+        csv_file_path = run_dir / f"train_log_{run_id}.csv"
+        logging.info(f"training run dir: {run_dir}")
+        csv_file = open(csv_file_path, "w", newline="", encoding="utf-8")
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(["record_type", "timestamp", "key", "value", "step", "loss"])
 
-    hyperparameters = {
-        "total_steps": TOTAL_STEPS,
-        "batch_size": BATCH_SIZE,
-        "vocab_size": VOCAB_SIZE,
-        "context_length": CONTEXT_LENGTH,
-        "d_model": D_MODEL,
-        "d_ff": D_FF,
-        "rope_theta": ROPE_THETA,
-        "num_heads": NUM_HEADS,
-        "num_layers": NUM_LAYERS,
-        "learning_rate": LEARNING_RATE,
-        "betas": BETAS,
-        "eps": EPS,
-        "weight_decay": WEIGHT_DECAY,
-        "l2_norm": L2_NORM,
-        "cosine_cycle_iters": COSINE_CYCLE_ITERS,
-        "device": str(DEVICE),
-        "data_type": str(DATA_TYPE),
-    }
-    for key, value in hyperparameters.items():
-        csv_writer.writerow(["hyperparameter", train_start_time.isoformat(), key, value, "", ""])
-    csv_file.flush()
-    logging.info(f"training csv log: {csv_file_path}")
+        hyperparameters = {
+            "total_steps": TOTAL_STEPS,
+            "batch_size": BATCH_SIZE,
+            "vocab_size": VOCAB_SIZE,
+            "context_length": CONTEXT_LENGTH,
+            "d_model": D_MODEL,
+            "d_ff": D_FF,
+            "rope_theta": ROPE_THETA,
+            "num_heads": NUM_HEADS,
+            "num_layers": NUM_LAYERS,
+            "learning_rate": LEARNING_RATE,
+            "betas": BETAS,
+            "eps": EPS,
+            "weight_decay": WEIGHT_DECAY,
+            "l2_norm": L2_NORM,
+            "cosine_cycle_iters": COSINE_CYCLE_ITERS,
+            "device": str(DEVICE),
+            "data_type": str(DATA_TYPE),
+        }
+        for key, value in hyperparameters.items():
+            csv_writer.writerow(["hyperparameter", train_start_time.isoformat(), key, value, "", ""])
+        csv_file.flush()
+        logging.info(f"training csv log: {csv_file_path}")
 
     start_iteration = 0
     if checkpoint_path is not None:
@@ -189,6 +212,8 @@ def train(checkpoint_path: Path = None):
             BACKEND.synchronize()
             logging.info(f"backward: {time.perf_counter() - t_backward:.4f}s")
 
+        model.finish_gradient_synchronization()
+
         gradient_clipping(model.parameters(), L2_NORM)
 
         if PROFILE:
@@ -200,12 +225,13 @@ def train(checkpoint_path: Path = None):
             logging.info(f"optimize: {time.perf_counter() - t_optimize:.4f}s")
 
         optimizer.zero_grad()
-        if iteration % 1000 == 0:
-            BACKEND.synchronize()
-            logging.info("saving checkpoint...")
-            ckpt_path = checkpoint_dir/f"{iteration}.ckpt"
-            save_checkpoint(model, optimizer, iteration, ckpt_path)
-            logging.info(f"checkpoint {ckpt_path.__str__()} saved")
+        if rank == 0:
+            if iteration % 1000 == 0:
+                BACKEND.synchronize()
+                logging.info("saving checkpoint...")
+                ckpt_path = checkpoint_dir/f"{iteration}.ckpt"
+                save_checkpoint(model, optimizer, iteration, ckpt_path)
+                logging.info(f"checkpoint {ckpt_path.__str__()} saved")
         if iteration % 100 == 0:
             BACKEND.synchronize()
             t = time.perf_counter() - start_time
@@ -232,7 +258,7 @@ def decode(output: Float[Tensor, "context_length vocab_size"], vocab: list[bytes
     return vocab[choice]
 
 
-def infer():
+def infer(model, optimizer):
     checkpoint_dir = Path("/data/cs336/cs336-assignment1-basics/training_runs/run_20260513_163104_batch64_3090/checkpoints")
     data_path = Path("/data/cs336/data/tinystories_train_tokenized/result.npy")
     data = np.load(data_path, mmap_mode="r")
@@ -262,6 +288,26 @@ def infer():
             print()
 
 
+def _setup_process_group(rank, world_size, backend):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12390"
+    # https://discuss.pytorch.org/t/should-local-rank-be-equal-to-torch-cuda-current-device/150873/2
+    if torch.cuda.is_available():
+        device_count = torch.cuda.device_count()
+        local_rank = None
+        if device_count > 0:
+            local_rank = rank % device_count
+            torch.cuda.set_device(local_rank)
+        else:
+            raise ValueError("Unable to find CUDA devices.")
+        device = f"cuda:{local_rank}"
+    else:
+        device = "cpu"
+    # initialize the process group
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+    return device
+
+
 def accounting():
     calculate_parameters(VOCAB_SIZE, CONTEXT_LENGTH, NUM_LAYERS, D_MODEL, NUM_HEADS, D_FF)
 
@@ -269,7 +315,7 @@ def accounting():
 # train(checkpoint_path=Path("checkpoints/1000.ckpt"))
 # infer()
 if __name__ == "__main__":
-    accounting()
-    # train()
-    infer()
+    # accounting()
+    ddp_train()
+    # infer()
     
