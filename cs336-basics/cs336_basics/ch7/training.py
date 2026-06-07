@@ -10,7 +10,7 @@ import torch
 import torch.distributed as dist
 import numpy as np
 
-from ch5.DDP import NaiveDDP
+from ch5.DDP import NaiveDDP, OverlapDDP
 from cs336_basics.ch3.transformer_accounting import calculate_parameters
 from jaxtyping import Float
 from torch import Tensor
@@ -70,7 +70,7 @@ logging.basicConfig(
 
 ################ Settings Done #################
 
-def init_model(device) -> (torch.nn.Module, torch.optim.Optimizer):
+def init_model(device) -> torch.nn.Module:
 
     weights = {
         'token_embeddings.weight': torch.empty(VOCAB_SIZE, D_MODEL, device=device, dtype=DATA_TYPE).normal_(mean=0.0, std=0.02),
@@ -103,6 +103,10 @@ def init_model(device) -> (torch.nn.Module, torch.optim.Optimizer):
         weights
     )
 
+    return model
+
+def init_optimizer(model: torch.nn.Module, device) -> torch.optim.Optimizer:
+
     logging.info("Init optimizer...")
     optimizer = AdamW(
         model.parameters(),
@@ -114,7 +118,7 @@ def init_model(device) -> (torch.nn.Module, torch.optim.Optimizer):
         cosine_cycle_iters=COSINE_CYCLE_ITERS,
     )
 
-    return model, optimizer
+    return optimizer
 
 # for param in model.parameters():
 #     print(param.shape)
@@ -122,7 +126,7 @@ def init_model(device) -> (torch.nn.Module, torch.optim.Optimizer):
 def ddp_train():
     world_size = 2
     torch.multiprocessing.spawn(
-        train,
+        _ddp_train,
         args=(world_size,),
         nprocs=world_size,
         join=True
@@ -130,7 +134,8 @@ def ddp_train():
 
 def _ddp_train(rank: int, world_size: int, *args):
     device = _setup_process_group(rank=rank, world_size=world_size, backend="nccl")
-    model, optimizer = init_model(device)
+    model = OverlapDDP(init_model(device))
+    optimizer = init_optimizer(model, device)
     train(model, optimizer, rank=rank)
 
 
@@ -228,21 +233,22 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
         if rank == 0:
             if iteration % 1000 == 0:
                 BACKEND.synchronize()
-                logging.info("saving checkpoint...")
+                logging.info(f"{rank=} saving checkpoint...")
                 ckpt_path = checkpoint_dir/f"{iteration}.ckpt"
                 save_checkpoint(model, optimizer, iteration, ckpt_path)
-                logging.info(f"checkpoint {ckpt_path.__str__()} saved")
+                logging.info(f"{rank=} checkpoint {ckpt_path.__str__()} saved")
         if iteration % 100 == 0:
             BACKEND.synchronize()
             t = time.perf_counter() - start_time
-            logging.info(f"last 100 iterations:  {t:.4f}s  average_loss: {loss_sum / 10:.4f}")
+            logging.info(f"{rank=} last 100 iterations:  {t:.4f}s  average_loss: {loss_sum / 10:.4f}")
             loss_sum = 0
             start_time = time.perf_counter()
         if iteration % 10 == 0:
-            logging.info(f"iteration: {iteration:06d}  loss: {entropy.item()}")
+            logging.info(f"{rank=} iteration: {iteration:06d}  loss: {entropy.item()}")
             loss_sum += entropy.item()
-            csv_writer.writerow(["metric", datetime.now().isoformat(), "", "", iteration, entropy.item()])
-            csv_file.flush()
+            if rank == 0:
+                csv_writer.writerow(["metric", datetime.now().isoformat(), "", "", iteration, entropy.item()])
+                csv_file.flush()
 
 
     # BACKEND.synchronize()
