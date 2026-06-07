@@ -8,6 +8,7 @@ from datetime import datetime
 import einops
 import torch
 import torch.distributed as dist
+import torch.cuda.nvtx as nvtx
 import numpy as np
 
 from ch5.DDP import NaiveDDP, OverlapDDP
@@ -26,7 +27,7 @@ from cs336_basics.ch5.get_batch import get_batch
 
 ############## Settings ##############
 
-TOTAL_STEPS = 5000
+TOTAL_STEPS = 10
 BATCH_SIZE = 64
 
 # Model Size
@@ -120,8 +121,13 @@ def init_optimizer(model: torch.nn.Module, device) -> torch.optim.Optimizer:
 
     return optimizer
 
-# for param in model.parameters():
-#     print(param.shape)
+
+def single_train():
+    device = torch.device("cuda")
+    model = init_model(device)
+    optimizer = init_optimizer(model, device)
+    train(model, optimizer)
+
 
 def ddp_train():
     world_size = 2
@@ -131,6 +137,7 @@ def ddp_train():
         nprocs=world_size,
         join=True
     )
+
 
 def _ddp_train(rank: int, world_size: int, *args):
     device = _setup_process_group(rank=rank, world_size=world_size, backend="nccl")
@@ -193,7 +200,8 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
         if PROFILE:
             BACKEND.synchronize()
             t_forward = time.perf_counter()
-        result = model.forward(batch.long())
+        with nvtx.range(f"fw"):
+            result = model.forward(batch.long())
         if PROFILE:
             BACKEND.synchronize()
             logging.info(f"forward: {time.perf_counter() - t_forward:.4f}s")
@@ -212,19 +220,23 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
         if PROFILE:
             BACKEND.synchronize()
             t_backward = time.perf_counter()
-        entropy.backward()
+        with nvtx.range(f"bw"):
+            entropy.backward()
         if PROFILE:
             BACKEND.synchronize()
             logging.info(f"backward: {time.perf_counter() - t_backward:.4f}s")
 
-        model.finish_gradient_synchronization()
+        if hasattr(model, "finish_gradient_synchronization"):
+            with nvtx.range(f"grad sync"):
+                model.finish_gradient_synchronization()
 
         gradient_clipping(model.parameters(), L2_NORM)
 
         if PROFILE:
             BACKEND.synchronize()
             t_optimize = time.perf_counter()
-        optimizer.step()
+        with nvtx.range(f"opt"):
+            optimizer.step()
         if PROFILE:
             BACKEND.synchronize()
             logging.info(f"optimize: {time.perf_counter() - t_optimize:.4f}s")
@@ -233,7 +245,7 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
         if rank == 0:
             if iteration % 1000 == 0:
                 BACKEND.synchronize()
-                logging.info(f"{rank=} saving checkpoint...")
+                logging.info(f"saving checkpoint...")
                 ckpt_path = checkpoint_dir/f"{iteration}.ckpt"
                 save_checkpoint(model, optimizer, iteration, ckpt_path)
                 logging.info(f"{rank=} checkpoint {ckpt_path.__str__()} saved")
@@ -321,7 +333,9 @@ def accounting():
 # train(checkpoint_path=Path("checkpoints/1000.ckpt"))
 # infer()
 if __name__ == "__main__":
+    single_train()
     # accounting()
-    ddp_train()
+    # ddp_train()
+
     # infer()
     
