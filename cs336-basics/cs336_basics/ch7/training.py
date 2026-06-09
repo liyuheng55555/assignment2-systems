@@ -12,6 +12,7 @@ import torch.cuda.nvtx as nvtx
 import numpy as np
 
 from ch5.DDP import NaiveDDP, OverlapDDP
+from ch5.FSDP import FSDP
 from cs336_basics.ch3.transformer_accounting import calculate_parameters
 from jaxtyping import Float
 from torch import Tensor
@@ -27,7 +28,7 @@ from cs336_basics.ch5.get_batch import get_batch
 
 ############## Settings ##############
 
-TOTAL_STEPS = 10
+TOTAL_STEPS = 105
 BATCH_SIZE = 64
 
 # Model Size
@@ -139,6 +140,23 @@ def ddp_train():
     )
 
 
+def fsdp_train():
+    world_size = 2
+    torch.multiprocessing.spawn(
+        _fsdp_train,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True
+    )
+
+
+def _fsdp_train(rank: int, world_size: int, *args):
+    device = _setup_process_group(rank=rank, world_size=world_size, backend="nccl")
+    model = FSDP(init_model(device))
+    optimizer = init_optimizer(model, device)
+    train(model, optimizer, rank=rank)
+
+
 def _ddp_train(rank: int, world_size: int, *args):
     device = _setup_process_group(rank=rank, world_size=world_size, backend="nccl")
     model = OverlapDDP(init_model(device))
@@ -153,6 +171,9 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
     data = np.load(data_path, mmap_mode="r")
 
     train_start_time = datetime.now()
+    csv_writer = None
+    csv_file = None
+    checkpoint_dir = None
     if rank==0:
         run_id = train_start_time.strftime("%Y%m%d_%H%M%S")
         run_dir = Path("training_runs") / f"run_{run_id}"
@@ -244,7 +265,7 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
 
         optimizer.zero_grad()
         if rank == 0:
-            if iteration % 1000 == 0:
+            if iteration > 0 and iteration % 1000 == 0:
                 BACKEND.synchronize()
                 logging.info(f"saving checkpoint...")
                 ckpt_path = checkpoint_dir/f"{iteration}.ckpt"
@@ -267,7 +288,7 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
     # BACKEND.synchronize()
     csv_file.close()
 
-    save_checkpoint(model, optimizer, TOTAL_STEPS, checkpoint_dir/f"{TOTAL_STEPS}.ckpt")
+    # save_checkpoint(model, optimizer, TOTAL_STEPS, checkpoint_dir/f"{TOTAL_STEPS}.ckpt")
 
 
 def decode(output: Float[Tensor, "context_length vocab_size"], vocab: list[bytes]):
@@ -334,9 +355,10 @@ def accounting():
 # train(checkpoint_path=Path("checkpoints/1000.ckpt"))
 # infer()
 if __name__ == "__main__":
-    ddp_train()
+    single_train()
     # accounting()
     # ddp_train()
+    # fsdp_train()
 
-    # infer()
+    # infer()uv run nsys profile --trace=cuda,cudnn,cublas,osrt,nvtx -- python cs336-basics/cs336_basics/ch7/training.py
     

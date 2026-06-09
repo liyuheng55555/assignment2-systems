@@ -46,7 +46,7 @@ class OverlapDDP(torch.nn.Module):
         start = perf_counter()
         for handle in self.handles:
             handle.wait()
-        logging.info(f"{dist.get_rank()=} gradient sync cost time {perf_counter() - start:.3} s")
+        # logging.info(f"{dist.get_rank()=} gradient sync cost time {perf_counter() - start:.3} s")
         with self.lock:
             self.handles.clear()
         for parameter in self.module.parameters():
