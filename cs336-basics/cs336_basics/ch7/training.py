@@ -1,3 +1,4 @@
+import inspect
 import logging
 import os
 import time
@@ -155,6 +156,7 @@ def _fsdp_train(rank: int, world_size: int, *args):
     model = FSDP(init_model(device))
     optimizer = init_optimizer(model, device)
     train(model, optimizer, rank=rank)
+    dist.destroy_process_group()
 
 
 def _ddp_train(rank: int, world_size: int, *args):
@@ -162,11 +164,15 @@ def _ddp_train(rank: int, world_size: int, *args):
     model = OverlapDDP(init_model(device))
     optimizer = init_optimizer(model, device)
     train(model, optimizer, rank=rank)
+    dist.destroy_process_group()
 
 
 
 def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_path: Path = None, rank: int=None):
-    logging.info("training start")
+    if rank is None:
+        rank = 0
+    caller = inspect.stack()[1].function
+    logging.info(f"{caller} training start")
     data_path = Path("/data/cs336/data/tinystories_train_tokenized/result.npy")
     data = np.load(data_path, mmap_mode="r")
 
@@ -174,9 +180,9 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
     csv_writer = None
     csv_file = None
     checkpoint_dir = None
-    if rank==0:
+    if rank==0 :
         run_id = train_start_time.strftime("%Y%m%d_%H%M%S")
-        run_dir = Path("training_runs") / f"run_{run_id}"
+        run_dir = Path("training_runs") / f"run_{run_id}_{caller}"
         checkpoint_dir = run_dir / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=False)
         csv_file_path = run_dir / f"train_log_{run_id}.csv"
@@ -274,7 +280,8 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
         if iteration % 100 == 0:
             BACKEND.synchronize()
             t = time.perf_counter() - start_time
-            logging.info(f"{rank=} last 100 iterations:  {t:.4f}s  average_loss: {loss_sum / 10:.4f}")
+            logging.info(f"{rank=} last 100 iterations: {t:.2f}s  average_loss: {loss_sum / 10:.4f}  max_memory: {torch.cuda.max_memory_allocated()/1024/1024:.2f} MB")
+            torch.cuda.reset_peak_memory_stats()
             loss_sum = 0
             start_time = time.perf_counter()
         if iteration % 10 == 0:
@@ -286,7 +293,8 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
 
 
     # BACKEND.synchronize()
-    csv_file.close()
+    if csv_file is not None:
+        csv_file.close()
 
     # save_checkpoint(model, optimizer, TOTAL_STEPS, checkpoint_dir/f"{TOTAL_STEPS}.ckpt")
 
@@ -355,10 +363,10 @@ def accounting():
 # train(checkpoint_path=Path("checkpoints/1000.ckpt"))
 # infer()
 if __name__ == "__main__":
-    single_train()
+    # single_train()
     # accounting()
     # ddp_train()
-    # fsdp_train()
+    fsdp_train()
 
     # infer()uv run nsys profile --trace=cuda,cudnn,cublas,osrt,nvtx -- python cs336-basics/cs336_basics/ch7/training.py
     

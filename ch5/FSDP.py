@@ -80,14 +80,15 @@ class FSDP(torch.nn.Module):
 
 
     def _recover_param(self, param: torch.nn.Parameter, expect_dtype) -> torch.Tensor:
-        param_info = self.param_infos[param]
-        buffer = [torch.zeros(param_info['shard'], device=param.device) for _ in range(dist.get_world_size())]
-        dist.all_gather(buffer, param.data)
-        flatten = torch.cat(buffer, dim=0)
-        flatten = flatten[:param_info['numel']]
-        full_tensor = flatten.reshape(param_info['shape'])
-        full_tensor = full_tensor.to(dtype=expect_dtype)
-        return full_tensor
+        with torch.cuda.nvtx.range("recover_param"):
+            param_info = self.param_infos[param]
+            buffer = [torch.zeros(param_info['shard'], device=param.device) for _ in range(dist.get_world_size())]
+            dist.all_gather(buffer, param.data)
+            flatten = torch.cat(buffer, dim=0)
+            flatten = flatten[:param_info['numel']]
+            full_tensor = flatten.reshape(param_info['shape'])
+            full_tensor = full_tensor.to(dtype=expect_dtype)
+            return full_tensor
 
 
     def get_full_params(self):
