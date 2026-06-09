@@ -4,15 +4,8 @@ import einops
 import torch.nn
 import torch.distributed as dist
 
-from cs336_basics.ch3.Embedding import Embedding
-from cs336_basics.ch3.Linear import Linear
-from cs336_basics.ch3.MultiHeadAttention import MultiHeadAttentionWithRope
-from cs336_basics.ch3.RMSNorm import RMSNorm
-
 '''
 实现中，搞了forward前的收集，还剩这些：
-1. forward之后的param恢复成sharded param
-2. backward何时释放完整参数？
 3. 异步all_gather?
 '''
 class FSDP(torch.nn.Module):
@@ -27,13 +20,13 @@ class FSDP(torch.nn.Module):
         self.lock = threading.Lock()
         self.handles = []
 
-        def pre_hook(m: torch.nn.Module, *args):
+        def gather_hook(m: torch.nn.Module, *args):
             for name, param in m.named_parameters(recurse=False):
                 if param in self.sharded_param_infos:
                     self.param_buffer[param] = param.data
                     param.data = self._recover_param(param, expect_dtype=self.compute_dtype)
 
-        def forward_hook(m: torch.nn.Module, *args):
+        def shard_hook(m: torch.nn.Module, *args):
             for name, param in m.named_parameters(recurse=False):
                 if param in self.sharded_param_infos:
                     param.data = self.param_buffer[param]
@@ -67,9 +60,9 @@ class FSDP(torch.nn.Module):
                     param.register_post_accumulate_grad_hook(all_reduce_hook)
 
         for sub_module in module.modules():
-            sub_module.register_forward_pre_hook(pre_hook)
-            sub_module.register_forward_hook(forward_hook)
-            sub_module.register_full_backward_pre_hook(pre_hook)
+            sub_module.register_forward_pre_hook(gather_hook)
+            sub_module.register_forward_hook(shard_hook)
+            sub_module.register_full_backward_pre_hook(gather_hook)
 
 
     def _sharded_param(self, full_param: torch.Tensor) -> torch.Tensor:
