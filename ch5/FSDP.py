@@ -4,7 +4,8 @@ import einops
 import torch.nn
 import torch.distributed as dist
 
-from cs336_basics.model import Linear, Embedding
+from cs336_basics.ch3.Embedding import Embedding
+from cs336_basics.ch3.Linear import Linear
 
 '''
 实现中，搞了forward前的收集，还剩这些：
@@ -24,13 +25,18 @@ class FSDP(torch.nn.Module):
         self.handles = []
 
         def pre_hook(m: torch.nn.Module, *args):
+            if next(m.children(), None) is not None:
+                return
             for param in m.parameters():
                 self.param_buffer[param] = param.data
                 param.data = self._recover_param(param, expect_dtype=self.compute_dtype)
 
         def forward_hook(m: torch.nn.Module, *args):
+            if next(m.children(), None) is not None:
+                return
             for param in m.parameters():
                 param.data = self.param_buffer[param]
+                del self.param_buffer[param]
 
         def sharded_all_reduce_hook(x: torch.nn.Parameter):
             handle = dist.all_reduce(x.grad, async_op=False)
@@ -44,14 +50,16 @@ class FSDP(torch.nn.Module):
             handle = dist.all_reduce(x.grad, async_op=False)
             x.grad /= dist.get_world_size()
 
-        for sub_module in module.children():
+        for sub_module in module.modules():
+            # 只处理叶子模块
+            if next(sub_module.children(), None) is not None:
+                continue
             # for small module
             if not isinstance(sub_module, (Linear, Embedding)):
                 for param in sub_module.parameters():
                     if param.requires_grad:
                         param.register_post_accumulate_grad_hook(all_reduce_hook)
                 continue
-
             # for big module
             sub_module.register_forward_pre_hook(pre_hook)
             sub_module.register_forward_hook(forward_hook)

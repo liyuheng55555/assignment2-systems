@@ -54,10 +54,10 @@ class TransformerBlock(nn.Module):
             in_features: Float[Tensor, " batch sequence_length d_model"],
             token_positions: Float[Tensor, " batch sequence_length"]
     ) -> Float[Tensor, " batch sequence_length d_model"]:
-        x = self.norm1.forward(in_features)
-        x = self.multihead_attention.forward(x, token_positions)
+        x = self.norm1(in_features)
+        x = self.multihead_attention(x, token_positions)
         step1 = x + in_features
-        x = self.norm2.forward(step1)
+        x = self.norm2(step1)
         x = self.position_wise_feed_forward(x)
         result = x + step1
         return result

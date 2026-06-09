@@ -89,8 +89,8 @@ class MultiHeadAttentionWithRope(nn.Module):
         multi_k = einops.rearrange(multi_k, "... seq_len (heads d_k) -> ... heads seq_len d_k", heads=self.num_heads)
         multi_v = einops.rearrange(multi_v, "... seq_len (heads d_v) -> ... heads seq_len d_v", heads=self.num_heads)
 
-        rope_q = self.rope.forward(multi_q, token_positions)
-        rope_k = self.rope.forward(multi_k, token_positions)
+        rope_q = self.rope(multi_q, token_positions)
+        rope_k = self.rope(multi_k, token_positions)
 
         seq_len : int = in_features.shape[-2]
 
@@ -158,8 +158,8 @@ class SingleHeadAttentionWithRope(nn.Module):
         # multi_k = einops.rearrange(multi_k, "... seq_len (heads d_k) -> ... heads seq_len d_k", heads=self.num_heads)
         # multi_v = einops.rearrange(multi_v, "... seq_len (heads d_v) -> ... heads seq_len d_v", heads=self.num_heads)
 
-        rope_q = self.rope.forward(multi_q, token_positions)
-        rope_k = self.rope.forward(multi_k, token_positions)
+        rope_q = self.rope(multi_q, token_positions)
+        rope_k = self.rope(multi_k, token_positions)
 
         attention = scaled_dot_product_attention(rope_q, rope_k, multi_v, self.mask)
 
@@ -167,16 +167,3 @@ class SingleHeadAttentionWithRope(nn.Module):
         result = einops.einsum(attention, self.W_o, "... seq_len d_model, d_out d_model-> ... seq_len d_out")
 
         return result
-
-# Q "heads  seq_len  d_q(d_model/num_heads)"
-def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: torch.Tensor = None):
-    d_k: int = Q.shape[-1]
-    # seq_len^2 * d_model
-    qkt = einops.einsum(Q, K, "... seq_len_q d_k, ... seq_len_k d_k -> ... seq_len_q seq_len_k")
-    scaled_qkt = qkt / math.sqrt(d_k)
-    if mask is not None:
-        scaled_qkt = scaled_qkt.masked_fill(~mask, float("-inf"))
-    softmax_qk = softmax(scaled_qkt, scaled_qkt.dim() - 1).to(dtype=V.dtype)
-    # seq_len^2 * d_model
-    result = einops.einsum(softmax_qk, V, "... seq_len_q seq_len_k, ... seq_len_k d_v -> ... seq_len_q d_v")
-    return result

@@ -229,7 +229,7 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
             BACKEND.synchronize()
             t_forward = time.perf_counter()
         with nvtx.range(f"fw"):
-            result = model.forward(batch.long())
+            result = model(batch.long())
         if PROFILE:
             BACKEND.synchronize()
             logging.info(f"forward: {time.perf_counter() - t_forward:.4f}s")
@@ -326,7 +326,7 @@ def infer(model, optimizer):
     with torch.no_grad():
         try:
             while True:
-                output = model.forward(context)
+                output = model(context)
                 next_logits = output[0, -1]
                 probability = softmax(next_logits, -1, temp=0.5)
                 next_id = torch.multinomial(probability, num_samples=1)

@@ -38,14 +38,14 @@ class TransformerLM(nn.Module):
     def forward(self, in_indices: Int[Tensor, " batch_size sequence_length"]):
         token_positions = torch.arange(in_indices.shape[-1], device=in_indices.device)
 
-        x = self.embedding_block.forward(in_indices)
+        x = self.embedding_block(in_indices)
 
         for transformer_block in self.transformer_blocks:
-            x = transformer_block.forward(x, token_positions)
+            x = transformer_block(x, token_positions)
 
-        x = self.norm.forward(x)
+        x = self.norm(x)
 
-        x = self.linear.forward(x)
+        x = self.linear(x)
 
         # x = softmax(x, -1)
 
