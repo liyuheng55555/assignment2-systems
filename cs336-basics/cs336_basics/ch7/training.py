@@ -57,7 +57,7 @@ COSINE_CYCLE_ITERS = TOTAL_STEPS
 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps")
 BACKEND = torch.cuda if torch.cuda.is_available() else torch.mps
 
-DATA_TYPE = torch.bfloat16
+DATA_TYPE = torch.float32
 
 PROFILE = False
 
@@ -357,8 +357,15 @@ def _setup_process_group(rank, world_size, backend):
 
 
 def accounting():
-    calculate_parameters(VOCAB_SIZE, CONTEXT_LENGTH, NUM_LAYERS, D_MODEL, NUM_HEADS, D_FF)
-
+    # calculate_parameters(VOCAB_SIZE, CONTEXT_LENGTH, NUM_LAYERS, D_MODEL, NUM_HEADS, D_FF)
+    device = torch.device("cuda")
+    model = init_model(device)
+    param_list: list[tuple[int, str]] = []
+    for name, param in model.named_parameters():
+        param_list.append((param.numel(), name))
+    param_list.sort(key=lambda x: x[0])
+    for t in param_list:
+        print(t)
 
 # train(checkpoint_path=Path("checkpoints/1000.ckpt"))
 # infer()

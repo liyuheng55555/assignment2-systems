@@ -6,6 +6,8 @@ import torch.distributed as dist
 
 from cs336_basics.ch3.Embedding import Embedding
 from cs336_basics.ch3.Linear import Linear
+from cs336_basics.ch3.MultiHeadAttention import MultiHeadAttentionWithRope
+from cs336_basics.ch3.RMSNorm import RMSNorm
 
 '''
 实现中，搞了forward前的收集，还剩这些：
@@ -17,26 +19,25 @@ class FSDP(torch.nn.Module):
     def __init__(self, module: torch.nn.Module, compute_dtype: torch.dtype | None = None):
         super().__init__()
         self.module = module
-        self.param_infos = {}
+        self.sharded_param_infos = {}
         self.param_buffer: dict[torch.nn.Parameter, torch.Tensor] = {}
         self.compute_dtype = compute_dtype
+        self.shard_threshold = 100000
 
         self.lock = threading.Lock()
         self.handles = []
 
         def pre_hook(m: torch.nn.Module, *args):
-            if next(m.children(), None) is not None:
-                return
-            for param in m.parameters():
-                self.param_buffer[param] = param.data
-                param.data = self._recover_param(param, expect_dtype=self.compute_dtype)
+            for name, param in m.named_parameters(recurse=False):
+                if param in self.sharded_param_infos:
+                    self.param_buffer[param] = param.data
+                    param.data = self._recover_param(param, expect_dtype=self.compute_dtype)
 
         def forward_hook(m: torch.nn.Module, *args):
-            if next(m.children(), None) is not None:
-                return
-            for param in m.parameters():
-                param.data = self.param_buffer[param]
-                del self.param_buffer[param]
+            for name, param in m.named_parameters(recurse=False):
+                if param in self.sharded_param_infos:
+                    param.data = self.param_buffer[param]
+                    del self.param_buffer[param]
 
         def sharded_all_reduce_hook(x: torch.nn.Parameter):
             handle = dist.all_reduce(x.grad, async_op=False)
@@ -50,31 +51,25 @@ class FSDP(torch.nn.Module):
             handle = dist.all_reduce(x.grad, async_op=False)
             x.grad /= dist.get_world_size()
 
-        for sub_module in module.modules():
-            # 只处理叶子模块
-            if next(sub_module.children(), None) is not None:
-                continue
-            # for small module
-            if not isinstance(sub_module, (Linear, Embedding)):
-                for param in sub_module.parameters():
-                    if param.requires_grad:
-                        param.register_post_accumulate_grad_hook(all_reduce_hook)
-                continue
-            # for big module
-            sub_module.register_forward_pre_hook(pre_hook)
-            sub_module.register_forward_hook(forward_hook)
-            sub_module.register_full_backward_pre_hook(pre_hook)
-            for param in sub_module.parameters():
+        for param in module.parameters():
+            if param.numel() >= self.shard_threshold:
                 sharded_tensor = self._sharded_param(param.data)
-                self.param_infos[param] = {
+                self.sharded_param_infos[param] = {
                     "shape": param.data.shape,
                     "numel": param.numel(),
                     "shard": sharded_tensor.numel()
                 }
                 param.data = sharded_tensor
-
                 if param.requires_grad:
                     param.register_post_accumulate_grad_hook(sharded_all_reduce_hook)
+            else:
+                if param.requires_grad:
+                    param.register_post_accumulate_grad_hook(all_reduce_hook)
+
+        for sub_module in module.modules():
+            sub_module.register_forward_pre_hook(pre_hook)
+            sub_module.register_forward_hook(forward_hook)
+            sub_module.register_full_backward_pre_hook(pre_hook)
 
 
     def _sharded_param(self, full_param: torch.Tensor) -> torch.Tensor:
@@ -89,7 +84,7 @@ class FSDP(torch.nn.Module):
 
     def _recover_param(self, param: torch.nn.Parameter, expect_dtype) -> torch.Tensor:
         with torch.cuda.nvtx.range("recover_param"):
-            param_info = self.param_infos[param]
+            param_info = self.sharded_param_infos[param]
             buffer = [torch.zeros(param_info['shard'], device=param.device) for _ in range(dist.get_world_size())]
             dist.all_gather(buffer, param.data)
             flatten = torch.cat(buffer, dim=0)
