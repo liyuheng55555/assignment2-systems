@@ -61,15 +61,15 @@ DATA_TYPE = torch.float32
 
 PROFILE = False
 
-if PROFILE:
-    logging.warning("Profiling is on")
-
 torch.manual_seed(69)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
+
+if PROFILE:
+    logging.warning("Profiling is on")
 
 ################ Settings Done #################
 

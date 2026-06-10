@@ -1,8 +1,10 @@
 import threading
+from dataclasses import dataclass
 
 import einops
 import torch.nn
 import torch.distributed as dist
+from torch.autograd.graph import saved_tensors_hooks
 
 '''
 实现中，搞了forward前的收集，还剩这些：
@@ -28,6 +30,16 @@ def report(tag="") -> (str, float):
     ), allocated
 
 
+@dataclass
+class ShardedTensor():
+    id: int
+    shard: torch.Tensor
+    shape: torch.Size
+    full_numel: int
+    shard_numel: int
+    dtype: torch.dtype
+
+
 
 class FSDP(torch.nn.Module):
     def __init__(self, module: torch.nn.Module, compute_dtype: torch.dtype | None = None):
@@ -35,8 +47,11 @@ class FSDP(torch.nn.Module):
         self.module = module
         self.sharded_param_infos = {}
         self.param_buffer: dict[torch.nn.Parameter, torch.Tensor] = {}
+        self.param_ptrs = {}
+        self.shard_ids = 0
         self.compute_dtype = compute_dtype
         self.shard_threshold = 100000
+        self.MEMORY_REPORT = True
 
         self.lock = threading.Lock()
         self.handles = []
@@ -48,22 +63,29 @@ class FSDP(torch.nn.Module):
                 if param in self.sharded_param_infos:
                     self.param_buffer[param] = param.data
                     param.data = self._recover_param(param, expect_dtype=self.compute_dtype)
+                    self.param_ptrs[param.data.untyped_storage().data_ptr()] = 0
                     count += 1
-            if dist.get_rank() == 0 and count > 0:
+            if self.MEMORY_REPORT and dist.get_rank() == 0 and count > 0:
                 post_report, post_alloc = report(f"{m._get_name()} after gather hook")
                 print(pre_report)
                 print(post_report)
                 print(f"diff = {post_alloc - pre_alloc:.2f} MB")
+
+        def backward_gather_hook(m: torch.nn.Module, *args):
+
+            gather_hook(m)
 
         def shard_hook(m: torch.nn.Module, *args):
             pre_report, pre_alloc = report(f"{m._get_name()} before shard hook")
             count = 0
             for name, param in m.named_parameters(recurse=False):
                 if param in self.sharded_param_infos:
+                    if param.data.untyped_storage().data_ptr() in self.param_ptrs:
+                        del self.param_ptrs[param.data.untyped_storage().data_ptr()]
                     param.data = self.param_buffer[param]
                     del self.param_buffer[param]
                     count += 1
-            if dist.get_rank() == 0 and count > 0:
+            if self.MEMORY_REPORT and dist.get_rank() == 0 and count > 0:
                 post_report, post_alloc = report(f"{m._get_name()} after shard hook")
                 print(pre_report)
                 print(post_report)
@@ -73,8 +95,10 @@ class FSDP(torch.nn.Module):
             handle = dist.all_reduce(x.grad, async_op=False)
             # with self.lock:
             #     self.handles.append(handle)
+            if x.data.untyped_storage().data_ptr() in self.param_ptrs:
+                del self.param_ptrs[x.data.untyped_storage().data_ptr()]
             x.data = self.param_buffer[x]
-            x.grad = self._sharded_param(x.grad).to(x.dtype)
+            x.grad = self._shard_param(x.grad).to(x.dtype)
             x.grad /= dist.get_world_size()
 
         def all_reduce_hook(x: torch.nn.Parameter):
@@ -83,7 +107,7 @@ class FSDP(torch.nn.Module):
 
         for param in module.parameters():
             if param.numel() >= self.shard_threshold:
-                sharded_tensor = self._sharded_param(param.data)
+                sharded_tensor = self._shard_param(param.data)
                 self.sharded_param_infos[param] = {
                     "shape": param.data.shape,
                     "numel": param.numel(),
@@ -102,7 +126,7 @@ class FSDP(torch.nn.Module):
             sub_module.register_full_backward_pre_hook(gather_hook)
 
 
-    def _sharded_param(self, full_param: torch.Tensor) -> torch.Tensor:
+    def _shard_param(self, full_param: torch.Tensor) -> torch.Tensor:
         flatten = einops.rearrange(full_param, "... -> (...)")
         step = (flatten.numel() + dist.get_world_size()-1) // dist.get_world_size()
         start = dist.get_rank() * step
@@ -123,6 +147,15 @@ class FSDP(torch.nn.Module):
             full_tensor = full_tensor.to(dtype=expect_dtype)
             return full_tensor
 
+    def _recover_param_from_ShardedTensor(self, sharded_tensor: ShardedTensor):
+        buffer = [torch.zeros(sharded_tensor.shard_numel, device=sharded_tensor.shard.device) for _ in range(dist.get_world_size())]
+        # print(f"[{dist.get_rank()}] recover {sharded_tensor.id=} {sharded_tensor.shape=}")
+        dist.all_gather(buffer, sharded_tensor.shard)
+        flatten = torch.cat(buffer, dim=0)
+        flatten = flatten[:sharded_tensor.full_numel]
+        full_tensor = flatten.reshape(sharded_tensor.shape)
+        full_tensor = full_tensor.to(dtype=sharded_tensor.dtype)
+        return full_tensor
 
     def get_full_params(self):
         result = {}
@@ -134,8 +167,38 @@ class FSDP(torch.nn.Module):
         return result
 
 
+    def pack_hook(self, t: torch.Tensor):
+        if t.numel() < self.shard_threshold or t.untyped_storage().data_ptr() not in self.param_ptrs:
+            return t
+        # print("pack_hook")
+        # self.param_ptrs.remove(t.untyped_storage().data_ptr())
+        del self.param_ptrs[t.untyped_storage().data_ptr()]
+        shard = self._shard_param(t)
+        self.shard_ids += 1
+        sharded_tensor = ShardedTensor(
+            id=self.shard_ids,
+            shard=shard,
+            shape=t.shape,
+            full_numel=t.numel(),
+            shard_numel=shard.numel(),
+            dtype=t.dtype,
+        )
+        # print(f"[{dist.get_rank()}] shard {sharded_tensor.id=} {sharded_tensor.shape=}")
+        if sharded_tensor.shape == torch.Size([64, 256, 512]):
+            print("shit!")
+        return sharded_tensor
+
+
+    def unpack_hook(self, t: torch.Tensor):
+        if not isinstance(t, ShardedTensor):
+            return t
+        # print("unpack_hook")
+        return self._recover_param_from_ShardedTensor(t)
+
+
     def forward(self, *inputs, **kwargs):
-        return self.module.forward(*inputs, **kwargs)
+        with saved_tensors_hooks(pack_hook=self.pack_hook, unpack_hook=self.unpack_hook):
+            return self.module.forward(*inputs, **kwargs)
 
 
     def finish_gradient_synchronization(self):
@@ -149,3 +212,6 @@ class FSDP(torch.nn.Module):
         #             parameter.grad /= dist.get_world_size()
         #     return
 
+    def finish_step(self):
+        return
+        # self.param_ptrs = {}

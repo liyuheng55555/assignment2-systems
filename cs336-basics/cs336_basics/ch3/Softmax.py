@@ -8,7 +8,7 @@ def softmax(x: torch.Tensor, i: int, temp: float = 1) -> torch.Tensor:
         temp_x = stabilized_x / temp
         temp_x = temp_x.to(dtype=x.dtype)
     else:
-        temp_x = x
+        temp_x = stabilized_x
     exp = torch.exp(temp_x)
     exp_sum = exp.sum(dim=i, keepdim=True)
     return exp / exp_sum
