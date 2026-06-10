@@ -8,6 +8,27 @@ import torch.distributed as dist
 实现中，搞了forward前的收集，还剩这些：
 3. 异步all_gather?
 '''
+
+
+def report(tag="") -> (str, float):
+    if dist.get_rank() != 0:
+        return "", 0
+    torch.cuda.synchronize()
+    allocated = torch.cuda.memory_allocated() / 1024**2
+    # reserved = torch.cuda.memory_reserved() / 1024**2
+    # peak_allocated = torch.cuda.max_memory_allocated() / 1024**2
+    # peak_reserved = torch.cuda.max_memory_reserved() / 1024**2
+
+    return (
+        f"[{tag}] "
+        f"allocated={allocated:.1f} MB, "
+        # f"reserved={reserved:.1f} MB, "
+        # f"peak_allocated={peak_allocated:.1f} MB, "
+        # f"peak_reserved={peak_reserved:.1f} MB"
+    ), allocated
+
+
+
 class FSDP(torch.nn.Module):
     def __init__(self, module: torch.nn.Module, compute_dtype: torch.dtype | None = None):
         super().__init__()
@@ -21,16 +42,32 @@ class FSDP(torch.nn.Module):
         self.handles = []
 
         def gather_hook(m: torch.nn.Module, *args):
+            pre_report, pre_alloc = report(f"{m._get_name()} before gather hook")
+            count = 0
             for name, param in m.named_parameters(recurse=False):
                 if param in self.sharded_param_infos:
                     self.param_buffer[param] = param.data
                     param.data = self._recover_param(param, expect_dtype=self.compute_dtype)
+                    count += 1
+            if dist.get_rank() == 0 and count > 0:
+                post_report, post_alloc = report(f"{m._get_name()} after gather hook")
+                print(pre_report)
+                print(post_report)
+                print(f"diff = {post_alloc - pre_alloc:.2f} MB")
 
         def shard_hook(m: torch.nn.Module, *args):
+            pre_report, pre_alloc = report(f"{m._get_name()} before shard hook")
+            count = 0
             for name, param in m.named_parameters(recurse=False):
                 if param in self.sharded_param_infos:
                     param.data = self.param_buffer[param]
                     del self.param_buffer[param]
+                    count += 1
+            if dist.get_rank() == 0 and count > 0:
+                post_report, post_alloc = report(f"{m._get_name()} after shard hook")
+                print(pre_report)
+                print(post_report)
+                print(f"diff = {post_alloc - pre_alloc:.2f} MB")
 
         def sharded_all_reduce_hook(x: torch.nn.Parameter):
             handle = dist.all_reduce(x.grad, async_op=False)
@@ -111,3 +148,4 @@ class FSDP(torch.nn.Module):
         #         if parameter.grad is not None:
         #             parameter.grad /= dist.get_world_size()
         #     return
+
