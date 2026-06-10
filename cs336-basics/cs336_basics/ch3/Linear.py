@@ -15,5 +15,5 @@ class Linear(nn.Module):
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return einops.einsum(self.w, x, "d_out d_in, ... d_in -> ... d_out")
-        # return torch.nn.functional.linear(x, self.w)
+        # return einops.einsum(self.w, x, "d_out d_in, ... d_in -> ... d_out")
+        return x @ self.w.transpose(-1, -2)

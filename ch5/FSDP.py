@@ -18,14 +18,16 @@ def report(tag="") -> (str, float):
     torch.cuda.synchronize()
     allocated = torch.cuda.memory_allocated() / 1024**2
     # reserved = torch.cuda.memory_reserved() / 1024**2
-    # peak_allocated = torch.cuda.max_memory_allocated() / 1024**2
+    peak_allocated = torch.cuda.max_memory_allocated() / 1024**2
     # peak_reserved = torch.cuda.max_memory_reserved() / 1024**2
+
+    torch.cuda.reset_max_memory_allocated()
 
     return (
         f"[{tag}] "
         f"allocated={allocated:.1f} MB, "
         # f"reserved={reserved:.1f} MB, "
-        # f"peak_allocated={peak_allocated:.1f} MB, "
+        f"peak_allocated={peak_allocated:.1f} MB, "
         # f"peak_reserved={peak_reserved:.1f} MB"
     ), allocated
 

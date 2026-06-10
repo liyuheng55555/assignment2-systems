@@ -280,12 +280,12 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, checkpoint_p
         if iteration % 100 == 0:
             BACKEND.synchronize()
             t = time.perf_counter() - start_time
-            logging.info(f"{rank=} last 100 iterations: {t:.2f}s  average_loss: {loss_sum / 10:.4f}  max_memory: {torch.cuda.max_memory_allocated()/1024/1024:.2f} MB")
-            torch.cuda.reset_peak_memory_stats()
+            logging.info(f"{rank=} last 100 iterations: {t:.2f}s  average_loss: {loss_sum / 10:.4f} ")
             loss_sum = 0
             start_time = time.perf_counter()
         if iteration % 10 == 0:
-            logging.info(f"{rank=} iteration: {iteration:06d}  loss: {entropy.item()}")
+            logging.info(f"{rank=} iteration: {iteration:06d}  loss: {entropy.item()}   max_memory: {torch.cuda.max_memory_allocated()/1024/1024:.2f} MB")
+            torch.cuda.reset_peak_memory_stats()
             loss_sum += entropy.item()
             if rank == 0:
                 csv_writer.writerow(["metric", datetime.now().isoformat(), "", "", iteration, entropy.item()])
